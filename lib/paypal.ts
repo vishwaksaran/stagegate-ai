@@ -9,7 +9,7 @@ export class PayPalApiError extends Error {
   constructor(
     readonly status: number,
     readonly path: string,
-    body: string,
+    readonly body: string,
   ) {
     super(`PayPal ${status} on ${path}: ${body.slice(0, 300)}`);
     this.name = 'PayPalApiError';
@@ -55,6 +55,47 @@ async function get<T>(path: string): Promise<T> {
       continue;
     }
     if ((res.status === 429 || res.status >= 500) && attempt < MAX_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 250));
+      continue;
+    }
+    throw new PayPalApiError(res.status, path, await res.text());
+  }
+}
+
+// Writes (used by StageGate, lib/stagegate.ts). A `requestId` is sent as PayPal-Request-Id, which makes
+// a POST idempotent: PayPal returns the original result for a repeated id instead of acting twice. That
+// is also what makes retrying a POST on 429/5xx safe, so POSTs without one are never retried.
+export async function paypalRequest<T>(
+  method: 'GET' | 'POST',
+  path: string,
+  options: { body?: unknown; requestId?: string; prefer?: 'return=representation' | 'return=minimal' } = {},
+): Promise<{ status: number; data: T; debugId?: string }> {
+  for (let attempt = 1; ; attempt++) {
+    const headers: Record<string, string> = { Authorization: `Bearer ${await accessToken()}` };
+    if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+    if (options.requestId) headers['PayPal-Request-Id'] = options.requestId;
+    if (options.prefer) headers.Prefer = options.prefer;
+
+    const res = await fetch(`${BASE_URL}${path}`, {
+      method,
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      cache: 'no-store',
+    });
+    if (res.ok) {
+      const text = await res.text();
+      return {
+        status: res.status,
+        data: (text ? JSON.parse(text) : {}) as T,
+        debugId: res.headers.get('paypal-debug-id') ?? undefined,
+      };
+    }
+    if (res.status === 401 && attempt === 1) {
+      cachedToken = undefined;
+      continue;
+    }
+    const retryable = method === 'GET' || Boolean(options.requestId);
+    if (retryable && (res.status === 429 || res.status >= 500) && attempt < MAX_ATTEMPTS) {
       await new Promise((resolve) => setTimeout(resolve, 2 ** attempt * 250));
       continue;
     }

@@ -55,13 +55,14 @@ const ratio = (id: string, name: string, description: string, numerator: string,
 
 // Whether the PayPal account has anything to report on. Without it, Studio would only show empty widgets.
 export const hasData = (data: DashboardData) =>
-  [data.invoices, data.transactions, data.products, data.plans, data.balances].some((rows) => rows.length > 0);
+  [data.invoices, data.transactions, data.products, data.plans, data.balances, data.stagegatePhases].some((rows) => rows.length > 0);
 
 export function buildStudioData(data: DashboardData): AgDataSourcesDefinition {
   const dates = [
     ...data.invoices.map((r) => r.invoiceDate),
     ...data.invoicePayments.map((r) => r.date),
     ...data.transactions.map((r) => r.date?.slice(0, 10)),
+    ...data.stagegateAudit.map((r) => r.at.slice(0, 10)),
   ]
     .filter((d): d is string => !!d)
     .sort();
@@ -71,7 +72,10 @@ export function buildStudioData(data: DashboardData): AgDataSourcesDefinition {
     description:
       'PayPal sandbox data fetched over the REST API for a merchant that sells subscription products and sends invoices. ' +
       'Invoices are in USD, EUR or GBP and are not converted, so filter by currency before summing money. ' +
-      'Invoice payments are recorded externally (bank transfer, card, check, cash). The ledger holds payouts to affiliates, creators and customers.',
+      'Invoice payments are recorded externally (bank transfer, card, check, cash). The ledger holds payouts to affiliates, creators and customers. ' +
+      'The StageGate tables describe StageGate AI, a cashflow safety lock: a client project split into 2 phases, each funded by a PayPal invoice. ' +
+      'An AI agent may buy a phase\'s equipment (sourced from Channel3) only after PayPal confirms that phase\'s invoice is paid, and never more than it brought in. ' +
+      'Every approved, blocked or failed attempt is in the StageGate audit trail.',
     sources: [
       {
         id: 'customers',
@@ -220,6 +224,78 @@ export function buildStudioData(data: DashboardData): AgDataSourcesDefinition {
           ['withheld', 'Withheld Balance', 'currencyFormat'],
         ]),
       },
+      {
+        id: 'stagegatePhases',
+        name: 'StageGate Phases',
+        description:
+          'StageGate Cashflow Safety Lock: one row per project phase, in USD. Locked means the phase\'s client invoice is not paid, so no supplier spend is allowed. ' +
+          'Collected is the invoice amount once paid; Spent is what was ordered from suppliers; Held by Lock is the cart total the lock is holding back. ' +
+          'Delay Days is how far a late client payment pushed the phase.',
+        data: data.stagegatePhases,
+        fields: fields([
+          ['id', 'Phase ID', 'textFormat', true],
+          ['project', 'StageGate Project', 'textFormat'],
+          ['phaseNumber', 'Phase Number', 'integerFormat'],
+          ['name', 'Phase', 'textFormat'],
+          ['startDate', 'Phase Start', 'dateFormat'],
+          ['endDate', 'Phase End', 'dateFormat'],
+          ['originalEndDate', 'Originally Planned End', 'dateFormat'],
+          ['delayDays', 'Delay Days', 'integerFormat'],
+          ['lockState', 'Lock State', 'textFormat'],
+          ['invoiceStatus', 'Phase Invoice Status', 'textFormat'],
+          ['invoiceNumber', 'Phase Invoice', 'textFormat'],
+          ['invoiceAmount', 'Phase Invoice Amount', 'currencyFormat'],
+          ['invoiced', 'Phase Invoiced', 'currencyFormat'],
+          ['collected', 'Phase Collected', 'currencyFormat'],
+          ['equipmentBudget', 'Equipment Budget', 'currencyFormat'],
+          ['cartTotal', 'Cart Total', 'currencyFormat'],
+          ['spent', 'Spent on Suppliers', 'currencyFormat'],
+          ['heldByLock', 'Held by Lock', 'currencyFormat'],
+          ['supplierOrderId', 'Supplier PayPal Order', 'textFormat'],
+          ['productSource', 'Product Source', 'textFormat'],
+          ['blockedAttempts', 'Blocked Attempts', 'integerFormat'],
+        ]),
+      },
+      {
+        id: 'stagegateAudit',
+        name: 'StageGate Audit Trail',
+        description:
+          'Every StageGate action, newest first: invoice creation and sending, payment verification, supplier purchase attempts, late payments and resets. ' +
+          'Outcome is Approved, Blocked (the safety lock stopped it, no money moved), Info or Error. Sum Is Blocked / Is Approved to count them. ' +
+          'Each row carries a SHA-256 hash chained to the previous row.',
+        data: data.stagegateAudit,
+        fields: fields([
+          ['id', 'Audit ID', 'textFormat', true],
+          ['seq', 'Audit #', 'integerFormat'],
+          ['at', 'Audit Time', 'dateTimeFormat'],
+          ['phaseId', 'Phase ID', 'textFormat', true],
+          ['action', 'Audit Action', 'textFormat'],
+          ['outcome', 'Audit Outcome', 'textFormat'],
+          ['message', 'What Happened', 'textFormat'],
+          ['amount', 'Audit Amount', 'currencyFormat'],
+          ['paypalCall', 'PayPal Call', 'textFormat'],
+          ['httpStatus', 'PayPal HTTP Status', 'integerFormat'],
+          ['isBlocked', 'Is Blocked', 'integerFormat'],
+          ['isApproved', 'Is Approved', 'integerFormat'],
+          ['sha256', 'SHA-256', 'textFormat'],
+        ]),
+      },
+      {
+        id: 'stagegateProducts',
+        name: 'StageGate Sourced Products',
+        description: 'Equipment found on Channel3 for each StageGate phase, in USD. In Cart marks what the agent would buy once the phase is funded.',
+        data: data.stagegateProducts,
+        fields: fields([
+          ['id', 'Sourced Product ID', 'textFormat', true],
+          ['phaseId', 'Phase ID', 'textFormat', true],
+          ['title', 'Sourced Product', 'textFormat'],
+          ['brand', 'Brand', 'textFormat'],
+          ['searchQuery', 'Search Query', 'textFormat'],
+          ['price', 'Product Price', 'currencyFormat'],
+          ['inCart', 'In Cart', 'booleanFormat'],
+          ['url', 'Product Link', 'textFormat'],
+        ]),
+      },
     ],
     relationships: [
       manyToOne('invoice-customer', 'invoices.customerId', 'customers.id'),
@@ -230,6 +306,9 @@ export function buildStudioData(data: DashboardData): AgDataSourcesDefinition {
       onCalendar('invoicePayments', 'date'),
       onCalendar('transactions', 'date', 'day'),
       onCalendar('payouts', 'date', 'day'),
+      manyToOne('stagegate-audit-phase', 'stagegateAudit.phaseId', 'stagegatePhases.id'),
+      manyToOne('stagegate-product-phase', 'stagegateProducts.phaseId', 'stagegatePhases.id'),
+      onCalendar('stagegateAudit', 'at', 'day'),
     ],
     calendars: [
       {

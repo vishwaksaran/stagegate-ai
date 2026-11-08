@@ -14,6 +14,7 @@ import {
   type Product,
   type Transaction,
 } from './paypal';
+import { getSnapshot, type StageGateSnapshot } from './stagegate';
 
 // Flat rows for the Dashboard's AG Studio data sources. Relationships between them:
 //   invoices.customerId        -> customers.id
@@ -273,17 +274,95 @@ function balanceRows({ balances = [] }: Balances) {
   }));
 }
 
+// --- StageGate AI ---------------------------------------------------------------------
+// The Cashflow Safety Lock's project (lib/stagegate.ts), so AG Studio and its AI assistant can
+// report on phases, sourced equipment and every approved or blocked attempt. Money in dollars.
+//   stagegateAudit.phaseId    -> stagegatePhases.id
+//   stagegateProducts.phaseId -> stagegatePhases.id
+
+const dollars = (cents: number | null | undefined) => (cents == null ? 0 : cents / 100);
+
+async function stageGateRows() {
+  let snap: StageGateSnapshot;
+  try {
+    snap = await getSnapshot();
+  } catch {
+    // StageGate is optional: never break the PayPal dashboard over it.
+    return { stagegatePhases: [], stagegateAudit: [], stagegateProducts: [] };
+  }
+  const blockedByPhase = new Map<string, number>();
+  for (const e of snap.audit) {
+    if (e.outcome === 'BLOCKED' && e.phaseId) blockedByPhase.set(e.phaseId, (blockedByPhase.get(e.phaseId) ?? 0) + 1);
+  }
+
+  const stagegatePhases = snap.phases.map((p, i) => ({
+    id: p.id,
+    project: snap.project.name,
+    phaseNumber: i + 1,
+    name: p.name,
+    startDate: p.startDate,
+    endDate: p.endDate,
+    originalEndDate: p.originalEndDate,
+    delayDays: p.delayDays,
+    lockState: p.locked ? 'Locked' : 'Unlocked',
+    invoiceStatus: p.invoiceStatus === 'PAID' ? 'Paid' : humanise(p.invoiceStatus),
+    invoiceNumber: p.invoice?.number ?? null,
+    invoiceAmount: dollars(p.invoiceAmountCents),
+    invoiced: p.invoice ? dollars(p.invoiceAmountCents) : 0,
+    collected: p.locked ? 0 : dollars(p.invoiceAmountCents),
+    equipmentBudget: dollars(p.equipmentBudgetCents),
+    cartTotal: dollars(p.cartTotalCents),
+    spent: dollars(p.purchase?.totalCents),
+    heldByLock: p.locked && !p.purchase ? dollars(p.cartTotalCents) : 0,
+    supplierOrderId: p.purchase?.orderId ?? null,
+    productSource: p.productSource === 'channel3' ? 'Channel3' : p.productSource === 'fallback' ? 'Sample catalog' : 'Not sourced',
+    blockedAttempts: blockedByPhase.get(p.id) ?? 0,
+  }));
+
+  const stagegateAudit = snap.audit.map((e) => ({
+    id: `audit-${e.seq}`,
+    seq: e.seq,
+    at: e.at,
+    phaseId: e.phaseId,
+    action: e.action,
+    outcome: humanise(e.outcome),
+    message: e.message,
+    amount: dollars(e.amountCents),
+    paypalCall: e.paypal ? `${e.paypal.method} ${e.paypal.path}` : null,
+    httpStatus: e.paypal?.httpStatus ?? null,
+    isBlocked: e.outcome === 'BLOCKED' ? 1 : 0,
+    isApproved: e.outcome === 'APPROVED' ? 1 : 0,
+    sha256: e.hash,
+  }));
+
+  const stagegateProducts = snap.phases.flatMap((p) =>
+    p.products.map((item) => ({
+      id: `${p.id}-${item.id}`,
+      phaseId: p.id,
+      title: item.title,
+      brand: item.brand ?? null,
+      searchQuery: item.query,
+      price: dollars(item.priceCents),
+      inCart: item.inCart,
+      url: item.url ?? null,
+    })),
+  );
+
+  return { stagegatePhases, stagegateAudit, stagegateProducts };
+}
+
 // --- Snapshot -----------------------------------------------------------------------
 
 const TRANSACTION_WINDOW_MS = TRANSACTION_SEARCH_MAX_DAYS * DAY_MS;
 
 export async function getDashboardData(asOf = new Date()) {
-  const [products, plans, invoices, transactions, balances] = await Promise.all([
+  const [products, plans, invoices, transactions, balances, stageGate] = await Promise.all([
     listProducts(),
     listPlans(),
     listInvoices(),
     searchTransactions(new Date(asOf.getTime() - TRANSACTION_WINDOW_MS), asOf),
     getBalances(),
+    stageGateRows(),
   ]);
   const today = asOf.toISOString().slice(0, 10);
 
@@ -298,6 +377,7 @@ export async function getDashboardData(asOf = new Date()) {
     transactions: transactionRows(transactions),
     payouts: payoutRows(transactions),
     balances: balanceRows(balances),
+    ...stageGate,
   };
 }
 

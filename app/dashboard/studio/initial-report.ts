@@ -395,8 +395,94 @@ const catalogue: AgPageState = {
     'catalogue-sunburst': at(16, 27, 8, 24),
   },
 };
-// The report opens on its first page.
+// StageGate AI's Cashflow Safety Lock: phases, what the lock held back, and the audit trail.
+const stagegate: AgPageState = {
+  id: 'stagegate',
+  widgets: {
+    'kpi-sg-collected': kpi('Collected from client', sum('stagegatePhases.collected')),
+    'kpi-sg-spent': kpi('Spent on suppliers', sum('stagegatePhases.spent')),
+    'kpi-sg-held': kpi('Held by safety lock', sum('stagegatePhases.heldByLock')),
+    'kpi-sg-blocked': kpi('Blocked attempts', sum('stagegateAudit.isBlocked')),
+    'sg-phase-money': {
+      type: 'bar-chart-grouped',
+      dataMapping: {
+        categoryKey: [{ id: 'stagegatePhases.name' }],
+        valueKey: [
+          sum('stagegatePhases.invoiceAmount'),
+          sum('stagegatePhases.collected'),
+          sum('stagegatePhases.cartTotal'),
+          sum('stagegatePhases.spent'),
+        ],
+      },
+      format: {
+        ...title('Per phase: invoiced, collected, cart and spent'),
+        style: { theme: { common: { legend: { enabled: true, position: 'bottom' } } } },
+      },
+    },
+    'sg-outcomes': {
+      type: 'donut-chart',
+      dataMapping: {
+        categoryKey: [{ id: 'stagegateAudit.outcome' }],
+        valueKey: [countd('stagegateAudit.id')],
+      },
+      format: {
+        ...title('Audit outcomes'),
+        style: { custom: { pieDataLabel: { enabled: true }, totalLabel: { enabled: true } } },
+      },
+    },
+    'sg-phases': {
+      type: 'grid',
+      dataMapping: {
+        cols: [
+          { id: 'stagegatePhases.phaseNumber' },
+          { id: 'stagegatePhases.name' },
+          { id: 'stagegatePhases.lockState' },
+          { id: 'stagegatePhases.invoiceStatus' },
+          { id: 'stagegatePhases.startDate' },
+          { id: 'stagegatePhases.endDate' },
+          { id: 'stagegatePhases.delayDays' },
+          sum('stagegatePhases.invoiceAmount'),
+          sum('stagegatePhases.equipmentBudget'),
+          sum('stagegatePhases.cartTotal'),
+          sum('stagegatePhases.spent'),
+          sum('stagegatePhases.blockedAttempts'),
+        ],
+      },
+      sort: [{ field: { id: 'stagegatePhases.phaseNumber' }, direction: 'asc' }],
+      format: title('StageGate phases'),
+    },
+    'sg-audit': {
+      type: 'grid',
+      dataMapping: {
+        cols: [
+          { id: 'stagegateAudit.seq' },
+          { id: 'stagegateAudit.at' },
+          { id: 'stagegateAudit.outcome' },
+          { id: 'stagegateAudit.action' },
+          { id: 'stagegateAudit.message' },
+          { id: 'stagegateAudit.paypalCall' },
+          sum('stagegateAudit.amount'),
+          { id: 'stagegateAudit.sha256' },
+        ],
+      },
+      sort: [{ field: { id: 'stagegateAudit.seq' }, direction: 'desc' }],
+      format: title('Audit trail (SHA-256 chained)'),
+    },
+  },
+  widgetLayout: {
+    'kpi-sg-collected': at(0, 0, 6, 7),
+    'kpi-sg-spent': at(6, 0, 6, 7),
+    'kpi-sg-held': at(12, 0, 6, 7),
+    'kpi-sg-blocked': at(18, 0, 6, 7),
+    'sg-phase-money': at(0, 7, 16, 18),
+    'sg-outcomes': at(16, 7, 8, 18),
+    'sg-phases': at(0, 25, 24, 12),
+    'sg-audit': at(0, 37, 24, 26),
+  },
+};
+
+// The report opens on the StageGate page.
 export const dashboardReport: AgReportState = {
-  selectedPageId: revenue.id,
-  pages: [revenue, receivables, cash, catalogue],
+  selectedPageId: stagegate.id,
+  pages: [stagegate, revenue, receivables, cash, catalogue],
 };

@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { StageGatePanel } from './stagegate-panel';
 
 const dashboard = { href: '/dashboard', label: 'Dashboard', detail: 'AG Studio reports over all of the data below' };
 
@@ -24,8 +25,19 @@ function PageLink({ href, label, detail }: { href: string; label: string; detail
 
 export default function Home() {
   return (
-    <main className="mx-auto w-full max-w-3xl p-16 font-paypal text-pp-ink">
-      <h1 className="text-[28px] font-semibold text-pp-navy">PayPal REST APIs with AG Grid &amp; AG Studio</h1>
+    <>
+      <div className="mx-auto w-full max-w-6xl px-4 pt-8 font-paypal text-pp-ink sm:px-8 sm:pt-12">
+        <StageGatePanel />
+      </div>
+      <Explorer />
+    </>
+  );
+}
+
+function Explorer() {
+  return (
+    <main className="mx-auto w-full max-w-3xl px-4 py-16 font-paypal text-pp-ink sm:px-16">
+      <h2 className="text-[28px] font-semibold text-pp-navy">PayPal REST APIs with AG Grid &amp; AG Studio</h2>
       <ul className="mt-6 divide-y divide-pp-border border-y border-pp-border">
         <PageLink {...dashboard} />
       </ul>
